@@ -11,7 +11,8 @@
     "custom-rubric": "ts-node src/index.ts rubric.txt",
     "repos": "ts-node src/index.ts repos.list",
     "analysis": "ts-node src/index.ts repos.list --analysis",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "clean": "rm -rf repo-output-* && echo 'Cleaned all repository output directories'"
   },
   "keywords": [
     "interview",

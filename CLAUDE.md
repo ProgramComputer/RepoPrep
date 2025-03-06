@@ -4,7 +4,7 @@
 - `npm install` - Install dependencies
 - `npm run build` - Compile TypeScript code
 - `npm run dev` or `npm run start` - Run application in development mode
-- `npm test` - Run tests (currently not implemented)
+- `npm run clean` - Remove all repo-output-* directories
 - `npm run multi` - Analyze multiple repositories
 - `npm run repos` - Run analysis using repositories from repos.list file
 - `npm run analysis` - Run in Analysis mode for direct answers to rubric questions
