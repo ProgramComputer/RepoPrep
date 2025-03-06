@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+build/
+*.js.map
+
+# Generated files
+interview_questions.json
+interview-report.json
+rubric.txt
+
+# Repository analysis directories and files
+repo-output*/
+repo-output-*/
+analyze/
+repomix-output.xml
+raw-api-response.txt
+
+# Environment and local settings
+.env
+.env.local
+*.env
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and debugging
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+debug.log
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Project-specific files
+repos.list

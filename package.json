@@ -1,0 +1,37 @@
+{
+  "name": "repoprep-ts",
+  "version": "1.0.0",
+  "description": "Prepare for technical interviews based on repository analysis",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "dev": "ts-node src/index.ts",
+    "multi": "ts-node src/index.ts https://github.com/ProgramComputer/friendly-tickets https://github.com/facebook/react",
+    "custom-rubric": "ts-node src/index.ts rubric.txt",
+    "repos": "ts-node src/index.ts repos.list",
+    "analysis": "ts-node src/index.ts repos.list --analysis",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "interview",
+    "preparation",
+    "repository",
+    "analysis"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/inquirer": "^9.0.7",
+    "@types/node": "^22.13.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.23.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.7",
+    "inquirer": "^8.2.4",
+    "repomix": "^0.2.34"
+  }
+}

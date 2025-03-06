@@ -1,0 +1,46 @@
+{
+  "output": {
+    "compress": false,
+    "style": "xml",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": true,
+    "topFilesLength": 20,
+    "showLineNumbers": false,
+    "copyToClipboard": false,
+    "includeEmptyDirectories": true,
+    "parsableStyle": false,
+    "filePath": "repomix-output.xml"
+  },
+  "include": ["**/*", ".cursorrules", ".cursor/rules/*", ".cursor/**"],
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": false,
+    "customPatterns": [
+      "**/.!(cursor)/**",
+      "**/*.pbxproj",
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/compile/**",
+      "**/*.spec.*",
+      "**/*.pyc",
+      "**/.env",
+      "**/.env.*",
+      "**/*.env",
+      "**/*.env.*",
+      "**/*.ltock",
+      "**/*.lockb",
+      "**/package-lock.*",
+      "**/pnpm-lock.*",
+      "**/*.tsbuildinfo"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  },
+  "tokenCount": {
+    "encoding": "o200k_base"
+  }
+}
