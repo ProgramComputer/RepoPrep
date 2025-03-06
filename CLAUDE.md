@@ -26,10 +26,12 @@
 
 ## Repository Analysis
 - Uses repomix (v0.2.34) for comprehensive repository analysis
-- Works within Gemini's ~204K token context limit (not 2M as originally thought)
-- Categorizes code samples by type (Core Files, API, Components, etc.)
-- Includes up to 600K characters (~150K tokens) of actual code
-- Supports multiple programming languages with syntax highlighting
+- Sends complete raw XML output directly to Gemini to maximize context usage
+- Fully utilizes Gemini 2.0's 2M token context window with the entire repository content
+- Handles up to 7M characters (~1.75M tokens) of XML data
+- Can handle files with all programming languages and preserves original structure
+- Provides detailed file metadata and structure information
+- Falls back to Gemini 1.5 Pro if encountering quota issues
 - Requires `GEMINI_API_KEY` in `.env` file or as environment variable
 - Creates output in `repo-output-{repoName}` directories
 - Raw API response saved to `raw-api-response.txt` for debugging

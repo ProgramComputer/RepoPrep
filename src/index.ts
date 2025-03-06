@@ -68,9 +68,13 @@ const OUTPUT_FILE = "interview_questions.json";
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-// Use the specified model version
+// Use Gemini 2.0 which has a 2M token context window
 const model = genAI.getGenerativeModel({ 
-  model: "gemini-2.0-pro-exp"
+  model: "gemini-2.0-pro-exp-02-05", // Use the correct model name
+  generationConfig: {
+    temperature: 0.2,  // Use lower temperature for more factual responses
+    maxOutputTokens: 30000 // Increase max output token count for detailed answers
+  }
 });
 
 // Default rubric if no file is provided
@@ -251,7 +255,7 @@ function generateMockRepositoryXml(repoUrl: string, repoName: string): string {
 
 /**
  * Answer rubric questions for a repository using Gemini
- * Makes a SINGLE API call for all questions
+ * Makes a SINGLE API call for all questions, using the direct raw repomix XML output
  */
 async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string): Promise<InterviewQuestion[]> {
   try {
@@ -273,165 +277,91 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
     // Format the questions in numbered list
     const questionsList = rubricQuestions.map((q, i) => `${i+1}. ${q}`).join('\n');
     
-    // Create a more informative analysis summary with code samples
-    let repoSummary = `Repository: ${repoAnalysis.name} (${repoAnalysis.repo})\n`;
-    
-    if (repoAnalysis.technologies && repoAnalysis.technologies.length > 0) {
-      repoSummary += `\nTechnologies: ${repoAnalysis.technologies.join(', ')}\n`;
-    }
-    
-    if (repoAnalysis.components && repoAnalysis.components.length > 0) {
-      repoSummary += `\nComponents/Modules: ${repoAnalysis.components.join(', ')}\n`;
-    }
-    
-    if (repoAnalysis.dependencies && repoAnalysis.dependencies.length > 0) {
-      repoSummary += `\nDependencies: ${repoAnalysis.dependencies.slice(0, 10).join(', ')}${repoAnalysis.dependencies.length > 10 ? '...' : ''}\n`;
-    }
-    
-    if (repoAnalysis.structure) {
-      repoSummary += `\nProject Structure: ${JSON.stringify(repoAnalysis.structure, null, 2)}\n`;
-    }
-    
-    // Include code samples for files, organizing by categories for better readability
-    if (repoAnalysis.codeFiles && Object.keys(repoAnalysis.codeFiles).length > 0) {
-      // Group files by type/directory for better organization
-      const filesByType: Record<string, Record<string, string>> = {
-        "Core Files": {},
-        "Configuration": {},
-        "Components": {},
-        "API/Services": {},
-        "Utils": {},
-        "Data Models": {},
-        "Styles": {},
-        "Documentation": {},
-        "Other Files": {}
-      };
-      
-      // Categorize files
-      Object.entries(repoAnalysis.codeFiles).forEach(([filePath, content]) => {
-        // Determine file category
-        let category = "Other Files";
+    // Read the raw XML file directly - this is the most comprehensive repository representation
+    let rawRepoContent = "";
+    if (repoAnalysis.outputFile && fs.existsSync(repoAnalysis.outputFile)) {
+      try {
+        rawRepoContent = fs.readFileSync(repoAnalysis.outputFile, 'utf-8');
         
-        if (filePath.includes("package.json") || filePath.endsWith(".env.example") || 
-            filePath.includes("config") || filePath.includes("tsconfig") || 
-            filePath.includes("webpack") || filePath.includes("vite")) {
-          category = "Configuration";
-        } else if (filePath.includes("/src/index") || filePath.includes("/app") || 
-                  filePath.includes("main") || filePath.includes("server")) {
-          category = "Core Files";
-        } else if (filePath.includes("/components/") || filePath.includes("/pages/") || 
-                  filePath.match(/\.(jsx|tsx|vue|svelte)$/)) {
-          category = "Components";
-        } else if (filePath.includes("/api/") || filePath.includes("/services/") || 
-                  filePath.includes("/providers/")) {
-          category = "API/Services";
-        } else if (filePath.includes("/utils/") || filePath.includes("/helpers/")) {
-          category = "Utils";
-        } else if (filePath.includes("/models/") || filePath.includes("schema") || 
-                  filePath.includes("types") || filePath.includes("/db/")) {
-          category = "Data Models";
-        } else if (filePath.match(/\.(css|scss|less|styl)$/)) {
-          category = "Styles";
-        } else if (filePath.match(/\.(md|txt|docs)$/)) {
-          category = "Documentation";
-        }
+        // Count files in XML to provide context
+        const fileCount = (rawRepoContent.match(/<file\s+path=/g) || []).length;
+        console.log(chalk.blue(`Repository XML contains ${fileCount} files`));
         
-        filesByType[category][filePath] = content as string;
-      });
-      
-      // Add files by category to the summary
-      repoSummary += `\n\n## CODE SAMPLES\n`;
-      
-      Object.entries(filesByType).forEach(([category, files]) => {
-        if (Object.keys(files).length > 0) {
-          repoSummary += `\n### ${category}\n`;
+        // Count total content size
+        console.log(chalk.blue(`Raw repository XML size: ${Math.round(rawRepoContent.length / 1024)}KB`));
+        
+        // Check if we need to truncate to fit token limits
+        // A very conservative estimate is 4 characters per token
+        // With Gemini 2.0's 2M token context, we can handle ~8M characters
+        const MAX_XML_SIZE = 7000000; // 7M chars (~1.75M tokens) to leave room for prompt and responses
+        
+        if (rawRepoContent.length > MAX_XML_SIZE) {
+          console.log(chalk.yellow(`XML content is too large (${Math.round(rawRepoContent.length / 1024)}KB), truncating to fit context window`));
+          // Keep the header section intact and truncate the file content sections
+          const header = rawRepoContent.substring(0, 10000); // Keep roughly the first 10K characters (repository metadata)
+          // Find a good truncation point by cutting off at a complete file tag
+          let truncationPoint = MAX_XML_SIZE - header.length - 100; // 100 chars for closing tags
+          // Find the last "</file>" before the truncation point
+          const lastCompleteFile = rawRepoContent.lastIndexOf("</file>", truncationPoint);
           
-          Object.entries(files).forEach(([filePath, content]) => {
-            // Add syntax highlighting based on file extension
-            const extension = filePath.split('.').pop() || '';
-            const syntax = getSyntaxHighlighting(extension);
-            repoSummary += `\n#### File: ${filePath}\n\`\`\`${syntax}\n${content}\n\`\`\`\n`;
-          });
+          if (lastCompleteFile > 0) {
+            rawRepoContent = header + 
+                            rawRepoContent.substring(10000, lastCompleteFile + 7) + // +7 to include "</file>"
+                            "\n<!-- Content truncated due to size limitations -->\n</repository>";
+            
+            console.log(chalk.blue(`Truncated XML to ${Math.round(rawRepoContent.length / 1024)}KB`));
+          } else {
+            // Fallback truncation method
+            rawRepoContent = rawRepoContent.substring(0, MAX_XML_SIZE) + 
+                            "\n<!-- Content truncated due to size limitations -->\n</repository>";
+          }
         }
-      });
-    }
-    
-    // Helper function to determine syntax highlighting based on file extension
-    function getSyntaxHighlighting(extension: string): string {
-      const syntaxMap: Record<string, string> = {
-        'js': 'javascript',
-        'jsx': 'jsx',
-        'ts': 'typescript',
-        'tsx': 'tsx',
-        'css': 'css',
-        'scss': 'scss',
-        'html': 'html',
-        'json': 'json',
-        'md': 'markdown',
-        'py': 'python',
-        'rb': 'ruby',
-        'go': 'go',
-        'java': 'java',
-        'php': 'php',
-        'sql': 'sql',
-        'sh': 'bash',
-        'yml': 'yaml',
-        'yaml': 'yaml',
-        'prisma': 'prisma',
-        'vue': 'vue',
-        'svelte': 'svelte',
-        'rust': 'rust',
-        'rs': 'rust',
-        'c': 'c',
-        'cpp': 'cpp',
-        'h': 'c',
-        'hpp': 'cpp',
-        'cs': 'csharp',
-        'swift': 'swift',
-        'kt': 'kotlin',
-        'gradle': 'gradle',
-        'dart': 'dart',
-        'xml': 'xml',
-        'graphql': 'graphql',
-        'gql': 'graphql'
-      };
-      
-      return syntaxMap[extension] || '';
-    }
-    
-    if (repoAnalysis.summary) {
-      repoSummary += `\n\nSummary: ${repoAnalysis.summary}\n`;
+      } catch (readError) {
+        console.error(chalk.red('Error reading XML file:'), readError);
+        rawRepoContent = "<!-- Error reading repository XML file -->";
+      }
+    } else {
+      console.warn(chalk.yellow(`Repository XML file not found at ${repoAnalysis.outputFile}, using parsed data instead`));
+      // Create basic structure details if we don't have the XML
+      rawRepoContent = `<repository name="${repoAnalysis.name}" url="${repoAnalysis.repo}">
+        <technologies>${(repoAnalysis.technologies || []).map((t: string) => `<technology>${t}</technology>`).join('')}</technologies>
+        <components>${(repoAnalysis.components || []).map((c: string) => `<component>${c}</component>`).join('')}</components>
+        <!-- No detailed code available, using summary information only -->
+      </repository>`;
     }
     
     // Create a single prompt for all questions
-    const prompt = `
-      You are an expert software developer analyzing a GitHub repository. You have been provided with code samples from this repository.
+    let prompt = `
+      You are an expert software developer analyzing a GitHub repository. You have been provided with the COMPLETE repository analysis output in XML format.
       
-      REPOSITORY ANALYSIS:
-      ${repoSummary}
+      ### REPOSITORY ANALYSIS XML:
       
-      THE ANALYSIS ABOVE WAS GENERATED BY REPOMIX, A TOOL THAT EXTRACTS REPOSITORY STRUCTURE, TECHNOLOGIES, AND CODE SAMPLES.
+      \`\`\`xml
+      ${rawRepoContent}
+      \`\`\`
       
-      Repomix works by cloning the repository, analyzing its structure and content, and extracting key files. The analysis above includes:
+      THE RAW XML ABOVE IS THE DIRECT OUTPUT FROM REPOMIX, A TOOL THAT CLONES AND ANALYZES REPOSITORIES.
       
-      1. A comprehensive list of technologies used in the repository
-      2. Major components and modules identified in the codebase
-      3. Key dependencies the project relies on
-      4. The project directory structure
-      5. Extensive code samples from the repository, organized by category
+      This XML contains:
       
-      This analysis is particularly valuable because it includes ACTUAL CODE from the repository, not just summaries or metadata. You have access to the real implementation details.
+      1. Complete repository structure with directories and files
+      2. Technologies and dependencies used in the codebase
+      3. THE ACTUAL SOURCE CODE for key files in the repository
+      4. Component/module information and relationships
+      
+      IMPORTANT: This XML contains the ACTUAL SOURCE CODE from the repository files, not summaries or descriptions. The code is contained within CDATA sections in the XML. You must analyze this source code to answer the questions accurately.
       
       Please answer the following questions about the repository. For each question, provide a detailed and specific response:
       
       ${questionsList}
       
       Your answers should:
-      1. Be comprehensive and reference the code samples provided
-      2. Reference specific code samples and quote relevant code snippets in your answers
+      1. Be comprehensive and reference specific code sections found in the XML
+      2. Quote relevant code snippets in your answers (with file paths)
       3. Analyze implementation details, patterns, and architectural choices evident in the code
       4. Provide concrete, specific feedback and recommendations based on the actual code
       5. Draw connections between different files and components to explain how they work together
+      6. If you cannot find specific code related to a question in the XML, explicitly state this limitation
       
       Format your response as a JSON object where the keys are the question numbers and the values are your answers.
       Example format:
@@ -445,15 +375,48 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
     `;
 
     try {
-      // Make a single API call with all questions
-      const result = await model.generateContent(prompt);
+      let result;
+      let usedModel = "gemini-2.0-pro-exp-02-05";
+      
+      try {
+        // First try with gemini-2.0-pro-exp-02-05
+        result = await model.generateContent(prompt);
+      } catch (modelError: unknown) {
+        const errorMessage = modelError instanceof Error ? modelError.message : String(modelError);
+        
+        // Check if we hit quota limits or other errors with gemini-2.0
+        if (errorMessage.includes('429') || errorMessage.includes('Too Many Requests') || 
+            errorMessage.includes('quota') || errorMessage.includes('Resource has been exhausted')) {
+          console.log(chalk.yellow('Gemini 2.0 quota exceeded, falling back to gemini-1.5-pro...'));
+          
+          // Create fallback model with gemini-1.5-pro
+          const fallbackModel = genAI.getGenerativeModel({ 
+            model: "gemini-1.5-pro",
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 30000
+            }
+          });
+          
+          // No need to reduce content size - Gemini 1.5 Pro has the same 2M token context window
+          console.log(chalk.yellow('Gemini 1.5 Pro also supports 2M tokens, maintaining full content'));
+          
+          // Try again with fallback model
+          result = await fallbackModel.generateContent(prompt);
+          usedModel = "gemini-1.5-pro";
+        } else {
+          // Re-throw other errors
+          throw modelError;
+        }
+      }
+      
       const responseText = result.response.text();
       
       // Save raw response to debug file in the same directory as the repo analysis
       const debugDir = path.dirname(repoAnalysis.outputFile || '.');
       const debugFile = path.join(debugDir, 'raw-api-response.txt');
       fs.writeFileSync(debugFile, responseText);
-      console.log(chalk.blue(`Raw API response saved to: ${debugFile}`));
+      console.log(chalk.blue(`Raw API response saved to: ${debugFile} (using ${usedModel})`));
       
       // Parse the JSON response
       let answers: Record<string, string>;
@@ -463,8 +426,8 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
       } catch (jsonError) {
         console.error(chalk.red('Error parsing JSON response directly. Attempting to extract JSON...'));
         
-        // Try to extract JSON if it's wrapped in markdown code blocks
-        const jsonMatch = responseText.match(/```(?:json)?\s*(\{.*?\})\s*```/s) || 
+        // Try to extract JSON if it's wrapped in markdown code blocks - using more robust pattern to handle large JSON responses
+        const jsonMatch = responseText.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/s) || 
                          responseText.match(/\{[\s\S]*?\}/s);
         
         if (jsonMatch) {
@@ -522,7 +485,7 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
       // Check for specific context window errors and provide better error messages
       if (errorMessage.includes('exceed context limit')) {
         console.error(chalk.red('Context limit exceeded.'));
-        console.error(chalk.yellow('The error shows the actual context limit of Gemini. Update MAX_CONTENT_LENGTH in the code accordingly.'));
+        console.error(chalk.yellow('The error shows the context limit being used. Check which Gemini model version is being used.'));
         const match = errorMessage.match(/(\d+) \+ (\d+) > (\d+)/);
         if (match) {
           const inputTokens = parseInt(match[1]);
@@ -531,7 +494,13 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
           console.error(chalk.yellow(`Current attempt: ${inputTokens} input tokens + ${outputTokens} output tokens = ${inputTokens + outputTokens} total`));
           console.error(chalk.yellow(`Context limit: ${contextLimit} tokens`));
           console.error(chalk.yellow(`Exceeding by: ${inputTokens + outputTokens - contextLimit} tokens`));
-          console.error(chalk.yellow(`Suggestion: Reduce MAX_CONTENT_LENGTH to around ${Math.floor((contextLimit - outputTokens) * 4 * 0.8)} characters`));
+          
+          if (contextLimit < 1000000) {
+            console.error(chalk.yellow(`WARNING: The API is not using Gemini 2.0's full 2M token context window.`));
+            console.error(chalk.yellow(`Check that model: "gemini-2.0-pro-exp" is correctly configured.`));
+          }
+          
+          console.error(chalk.yellow(`Suggestion: Adjust MAX_CONTENT_LENGTH to around ${Math.floor((contextLimit - outputTokens) * 4 * 0.8)} characters`));
         }
       }
       
@@ -693,11 +662,12 @@ async function evaluateAnswerWithGemini(
 }
 
 /**
- * Parse repomix XML output to extract relevant information and code samples
+ * Parse repomix XML output to extract basic repository information
+ * We'll use the raw XML directly for analysis, but extract basic metadata
  */
 function parseRepomixOutput(xmlContent: string, repoUrl: string, repoName: string): any {
   try {
-    // Extract technologies (simplified approach)
+    // Extract basic technologies (for fallback or display)
     const technologies: string[] = [];
     const techMatches = xmlContent.match(/<technology[^>]*>([^<]+)<\/technology>/g);
     if (techMatches) {
@@ -709,7 +679,7 @@ function parseRepomixOutput(xmlContent: string, repoUrl: string, repoName: strin
       });
     }
     
-    // Extract components or modules
+    // Extract components or modules (for fallback or display)
     const components: string[] = [];
     const compMatches = xmlContent.match(/<component[^>]*>([^<]+)<\/component>/g) || 
                       xmlContent.match(/<module[^>]*>([^<]+)<\/module>/g);
@@ -722,7 +692,7 @@ function parseRepomixOutput(xmlContent: string, repoUrl: string, repoName: strin
       });
     }
     
-    // Extract dependencies
+    // Extract dependencies (for fallback or display)
     const dependencies: string[] = [];
     const depMatches = xmlContent.match(/<dependency[^>]*>([^<]+)<\/dependency>/g);
     if (depMatches) {
@@ -734,147 +704,26 @@ function parseRepomixOutput(xmlContent: string, repoUrl: string, repoName: strin
       });
     }
 
-    // Extract project structure
-    let structure = {};
-    const structureMatch = xmlContent.match(/<structure>([\s\S]*?)<\/structure>/);
-    if (structureMatch) {
-      const structureContent = structureMatch[1];
-      
-      // Parse directory structure in a nested format
-      const dirRegex = /<directory\s+path="([^"]+)">([\s\S]*?)<\/directory>/g;
-      const fileRegex = /<file\s+path="([^"]+)">([^<]*)<\/file>/g;
-      
-      let dirMatch;
-      let fileMatch;
-      const parsedStructure: Record<string, any> = {};
-      
-      // Extract directories
-      while ((dirMatch = dirRegex.exec(structureContent)) !== null) {
-        const dirPath = dirMatch[1];
-        parsedStructure[dirPath] = {};
-      }
-      
-      // Extract files
-      while ((fileMatch = fileRegex.exec(structureContent)) !== null) {
-        const filePath = fileMatch[1];
-        const fileDesc = fileMatch[2];
-        parsedStructure[filePath] = fileDesc || "No description";
-      }
-      
-      structure = parsedStructure;
-    }
+    // Count total files in XML
+    const fileCount = (xmlContent.match(/<file\s+path=/g) || []).length;
+    const fileWithContentCount = (xmlContent.match(/<file\s+path=[^>]*>\s*<content>/g) || []).length;
     
-    // Extract code samples from files
-    const codeFiles: Record<string, string> = {};
-    const fileMatches = xmlContent.match(/<file\s+path="([^"]+)">\s*<content>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/content>\s*<\/file>/g);
+    console.log(chalk.blue(`Repository XML contains ${fileCount} files, ${fileWithContentCount} with content`));
+    console.log(chalk.blue(`Raw XML size: ${Math.round(xmlContent.length / 1024)}KB (${Math.round(xmlContent.length / 4000)} tokens approx.)`));
     
-    if (fileMatches) {
-      // Keep track of total content length
-      let totalContentLength = 0;
-      // Based on error: "input length and `max_tokens` exceed context limit: 185087 + 20000 > 204698"
-      // The actual context window is ~204K tokens, not 2M
-      // Setting a conservative max of 600K characters (~150K tokens) to ensure we stay under limit
-      // This leaves room for prompt and for generation capacity
-      const MAX_CONTENT_LENGTH = 600000; 
-      
-      // First pass - include all important files regardless of size
-      for (const match of fileMatches) {
-        const fileMatch = /<file\s+path="([^"]+)">\s*<content>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/content>\s*<\/file>/g.exec(match);
-        if (fileMatch) {
-          const filePath = fileMatch[1];
-          const fileContent = fileMatch[2];
-          
-          // High priority files - always include these if possible
-          const isHighPriorityFile = 
-            filePath.includes("index") || // Main entry points
-            filePath.includes("config") || // Config files
-            filePath.includes("package.json") || // Package files
-            filePath.match(/\/(app|main|server)\.(js|ts|tsx)$/) || // Main app files
-            filePath.endsWith("README.md") || // Documentation
-            filePath.endsWith("schema.prisma") || // Database schema
-            filePath.match(/\.(env|example)$/); // Environment configs
-          
-          if (isHighPriorityFile && totalContentLength + fileContent.length < MAX_CONTENT_LENGTH) {
-            codeFiles[filePath] = fileContent;
-            totalContentLength += fileContent.length;
-          }
-        }
-      }
-      
-      // Second pass - include source code files (.js, .ts, .jsx, .tsx, etc.)
-      for (const match of fileMatches) {
-        const fileMatch = /<file\s+path="([^"]+)">\s*<content>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/content>\s*<\/file>/g.exec(match);
-        if (fileMatch) {
-          const filePath = fileMatch[1];
-          const fileContent = fileMatch[2];
-          
-          // Skip if already included in first pass
-          if (codeFiles[filePath]) continue;
-          
-          // Source code files
-          const isSourceCodeFile = 
-            filePath.match(/\.(js|jsx|ts|tsx|vue|svelte|py|rb|go|java|kt|swift|c|cpp|h|hpp|cs|php|rs|dart)$/) && 
-            !filePath.includes("test") && 
-            !filePath.includes("spec") &&
-            !filePath.includes("__tests__") &&
-            !filePath.includes("__mocks__") &&
-            !filePath.includes("node_modules");
-            
-          if (isSourceCodeFile && totalContentLength + fileContent.length < MAX_CONTENT_LENGTH) {
-            codeFiles[filePath] = fileContent;
-            totalContentLength += fileContent.length;
-          }
-        }
-      }
-      
-      // Third pass - include other useful files (CSS, HTML, etc.)
-      for (const match of fileMatches) {
-        const fileMatch = /<file\s+path="([^"]+)">\s*<content>\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*<\/content>\s*<\/file>/g.exec(match);
-        if (fileMatch) {
-          const filePath = fileMatch[1];
-          const fileContent = fileMatch[2];
-          
-          // Skip if already included
-          if (codeFiles[filePath]) continue;
-          
-          // Other useful files
-          const isUsefulFile = 
-            filePath.match(/\.(css|scss|sass|less|html|xml|json|yml|yaml|md|sql|graphql|gql|prisma|toml|ini|sh|bash|zsh|bat|conf|env)$/) && 
-            !filePath.includes("node_modules");
-            
-          if (isUsefulFile && totalContentLength + fileContent.length < MAX_CONTENT_LENGTH) {
-            codeFiles[filePath] = fileContent;
-            totalContentLength += fileContent.length;
-          }
-        }
-      }
-      
-      // Convert to kilobytes for more readable output
-      const totalKB = (totalContentLength / 1024).toFixed(2);
-      // More accurate token estimation based on observed limits
-      const estimatedTokens = Math.round(totalContentLength / 4); // Rough estimate: 4 chars per token on average
-      const safetyFactor = 0.8; // 80% of estimated limit to leave room for prompt
-      const expectedContextUsage = Math.round((estimatedTokens / 204698) * 100); // Calculate percentage based on observed limit
-      console.log(chalk.blue(`Including ${Object.keys(codeFiles).length} files (${totalKB}KB, ~${estimatedTokens.toLocaleString()} tokens, ${expectedContextUsage}% of context) in analysis`));
-      
-      // Add warning if we're approaching the limit
-      if (expectedContextUsage > 70) {
-        console.warn(chalk.yellow(`WARNING: Using ${expectedContextUsage}% of available context window. This may lead to truncation or errors.`));
-        console.warn(chalk.yellow(`The Gemini API has a context limit of ~204K tokens, not 2M as documented elsewhere.`));
-      }
-    }
-    
-    // Create structured analysis
+    // Create basic analysis summary - we'll use the raw XML directly for the full analysis
     return {
       repo: repoUrl,
       name: repoName,
       technologies: technologies.length > 0 ? technologies : ["JavaScript", "TypeScript", "React", "Node.js"],
       components: components.length > 0 ? components : ["Core", "API", "UI", "Utils"],
       dependencies: dependencies.length > 0 ? dependencies : [],
-      structure: structure,
-      codeFiles: codeFiles, // Include code samples in the analysis
+      outputFile: null, // Will be set after the function call
       analysisDate: new Date().toISOString(),
-      summary: "Repository analysis completed using repomix. Extracted structure, technological stack, and key code samples for evaluation."
+      fileCount: fileCount,
+      fileWithContentCount: fileWithContentCount,
+      xmlSize: xmlContent.length,
+      summary: "Repository analysis completed using repomix. Using raw XML for full context analysis."
     };
   } catch (parseError) {
     console.error(chalk.red('Error parsing repomix output:'), parseError);
