@@ -290,31 +290,106 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
         // Count total content size
         console.log(chalk.blue(`Raw repository XML size: ${Math.round(rawRepoContent.length / 1024)}KB`));
         
-        // Check if we need to truncate to fit token limits
-        // A very conservative estimate is 4 characters per token
-        // With Gemini 2.0's 2M token context, we can handle ~8M characters
-        const MAX_XML_SIZE = 7000000; // 7M chars (~1.75M tokens) to leave room for prompt and responses
+        // Gemini 2.0 has 2M token limit, but we need to leave room for:
+        // - Our prompt text (~1000 tokens)
+        // - The questions (~500 tokens)
+        // - The response (~30K tokens)
+        // So we'll limit the XML content to ~1.9M tokens to be safe
+        const MAX_XML_TOKEN_LIMIT = 1900000;
         
-        if (rawRepoContent.length > MAX_XML_SIZE) {
-          console.log(chalk.yellow(`XML content is too large (${Math.round(rawRepoContent.length / 1024)}KB), truncating to fit context window`));
+        // Use model.countTokens to get exact token count directly from the API
+        try {
+          console.log(chalk.blue("Counting tokens using Gemini API..."));
+          // Create the actual prompt that will be sent, including all XML content
+          const fullPromptObject = `
+            You are an expert software developer analyzing a GitHub repository. You have been provided with the COMPLETE repository analysis output in XML format.
+            
+            ### REPOSITORY ANALYSIS XML:
+            
+            \`\`\`xml
+            ${rawRepoContent}
+            \`\`\`
+            
+            THE RAW XML ABOVE IS THE DIRECT OUTPUT FROM REPOMIX, A TOOL THAT CLONES AND ANALYZES REPOSITORIES.
+          `;
+          
+          const tokenCount = await model.countTokens(fullPromptObject);
+          console.log(chalk.blue(`Actual token count from API: ${tokenCount.totalTokens.toLocaleString()} tokens`));
+          console.log(chalk.blue(`Maximum allowed tokens: ${MAX_XML_TOKEN_LIMIT.toLocaleString()} tokens`));
+          
+          // Check if we need to truncate
+          if (tokenCount.totalTokens > MAX_XML_TOKEN_LIMIT) {
+            console.log(chalk.yellow(`XML content exceeds token limit (${tokenCount.totalTokens.toLocaleString()} > ${MAX_XML_TOKEN_LIMIT.toLocaleString()}), truncating to fit context window`));
+            
+            // Calculate the approximate length in characters we need to keep
+            // This ratio tells us how many characters per token for this specific XML content
+            const charsPerToken = rawRepoContent.length / tokenCount.totalTokens;
+            console.log(chalk.blue(`Characters per token for this content: ${charsPerToken.toFixed(2)}`));
+            
+            // Calculate how many characters to keep to stay under our token limit
+            const targetCharLength = Math.floor(MAX_XML_TOKEN_LIMIT * charsPerToken);
+            console.log(chalk.blue(`Target character length: ${targetCharLength.toLocaleString()}`));
+            
+            // Keep the header section intact and truncate the file content sections
+            const header = rawRepoContent.substring(0, 10000); // Keep roughly the first 10K characters (repository metadata)
+            // Find a good truncation point by cutting off at a complete file tag
+            let truncationPoint = targetCharLength - header.length - 100; // 100 chars for closing tags
+            // Find the last "</file>" before the truncation point
+            const lastCompleteFile = rawRepoContent.lastIndexOf("</file>", truncationPoint + 10000); // Add 10000 to account for header offset
+            
+            if (lastCompleteFile > 0) {
+              rawRepoContent = header + 
+                            rawRepoContent.substring(10000, lastCompleteFile + 7) + // +7 to include "</file>"
+                            `\n<!-- Content truncated to fit ${MAX_XML_TOKEN_LIMIT.toLocaleString()} token limit -->\n</repository>`;
+            } else {
+              // Fallback truncation method
+              rawRepoContent = rawRepoContent.substring(0, targetCharLength) + 
+                            `\n<!-- Content truncated to fit token limits -->\n</repository>`;
+            }
+            
+            // Verify final token count - use the same format as the actual prompt
+            const finalPromptObject = `
+              You are an expert software developer analyzing a GitHub repository. You have been provided with the COMPLETE repository analysis output in XML format.
+              
+              ### REPOSITORY ANALYSIS XML:
+              
+              \`\`\`xml
+              ${rawRepoContent}
+              \`\`\`
+              
+              THE RAW XML ABOVE IS THE DIRECT OUTPUT FROM REPOMIX, A TOOL THAT CLONES AND ANALYZES REPOSITORIES.
+            `;
+            
+            const finalTokenCount = await model.countTokens(finalPromptObject);
+            console.log(chalk.blue(`Final token count: ${finalTokenCount.totalTokens.toLocaleString()} tokens`));
+            console.log(chalk.blue(`Final XML size: ${Math.round(rawRepoContent.length / 1024)}KB`));
+          }
+        } catch (tokenCountError) {
+          console.log(chalk.yellow(`Error counting tokens: ${tokenCountError}`));
+          console.log(chalk.yellow("Using conservative truncation approach instead"));
+          
+          // If countTokens fails, use a very conservative estimate of 3 chars per token
+          const CONSERVATIVE_CHARS_PER_TOKEN = 3;
+          const conservativeTargetLength = MAX_XML_TOKEN_LIMIT * CONSERVATIVE_CHARS_PER_TOKEN;
+          
           // Keep the header section intact and truncate the file content sections
           const header = rawRepoContent.substring(0, 10000); // Keep roughly the first 10K characters (repository metadata)
           // Find a good truncation point by cutting off at a complete file tag
-          let truncationPoint = MAX_XML_SIZE - header.length - 100; // 100 chars for closing tags
+          let truncationPoint = conservativeTargetLength - header.length - 100; // 100 chars for closing tags
           // Find the last "</file>" before the truncation point
-          const lastCompleteFile = rawRepoContent.lastIndexOf("</file>", truncationPoint);
+          const lastCompleteFile = rawRepoContent.lastIndexOf("</file>", truncationPoint + 10000);
           
           if (lastCompleteFile > 0) {
             rawRepoContent = header + 
-                            rawRepoContent.substring(10000, lastCompleteFile + 7) + // +7 to include "</file>"
-                            "\n<!-- Content truncated due to size limitations -->\n</repository>";
-            
-            console.log(chalk.blue(`Truncated XML to ${Math.round(rawRepoContent.length / 1024)}KB`));
+                          rawRepoContent.substring(10000, lastCompleteFile + 7) + // +7 to include "</file>"
+                          `\n<!-- Content truncated to fit ${MAX_XML_TOKEN_LIMIT.toLocaleString()} token limit -->\n</repository>`;
           } else {
             // Fallback truncation method
-            rawRepoContent = rawRepoContent.substring(0, MAX_XML_SIZE) + 
-                            "\n<!-- Content truncated due to size limitations -->\n</repository>";
+            rawRepoContent = rawRepoContent.substring(0, conservativeTargetLength) + 
+                          `\n<!-- Content truncated to fit token limits -->\n</repository>`;
           }
+          
+          console.log(chalk.blue(`Conservatively truncated XML to ${Math.round(rawRepoContent.length / 1024)}KB`));
         }
       } catch (readError) {
         console.error(chalk.red('Error reading XML file:'), readError);

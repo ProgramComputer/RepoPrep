@@ -29,6 +29,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^0.2.35",
     "@google/generative-ai": "^0.23.0",
     "chalk": "^4.1.2",
     "dotenv": "^16.4.7",
