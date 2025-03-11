@@ -3,11 +3,12 @@
 ## Build / Test Commands
 - `npm install` - Install dependencies
 - `npm run build` - Compile TypeScript code
-- `npm run dev` or `npm run start` - Run application in development mode
+- `npm run dev` or `npm run start` - Run application in development mode (uses ts-node)
 - `npm run clean` - Remove all repo-output-* directories
 - `npm run multi` - Analyze multiple repositories
 - `npm run repos` - Run analysis using repositories from repos.list file
 - `npm run analysis` - Run in Analysis mode for direct answers to rubric questions
+- `npm run test` - Run tests (not currently implemented)
 - Custom run: `ts-node src/index.ts path/to/rubric.txt repo-url1 repo-url2`
 
 ## Code Style Guidelines
@@ -19,21 +20,18 @@
 - **Formatting**: 2 spaces indentation, semicolons, single quotes
 - **Variables**: Prefer const over let, avoid mutable state when possible
 - **Logging**: Use chalk for colored terminal output (`chalk.blue`, `chalk.red`, etc.)
+- **Type Safety**: Avoid `any`, use explicit type annotations like `ReturnType<typeof funcName>` when needed
+- **String Interpolation**: Use template literals for string construction
 
 ## Operation Modes
 - **REPL/Interview mode** (default): Interactive interview with questions from rubric
 - **Analysis mode** (--analysis or -a flag): Direct answers to rubric questions
 
-## Repository Analysis
-- Uses repomix (v0.2.34) for comprehensive repository analysis
-- Sends complete raw XML output directly to Gemini to maximize context usage
-- Accurately tracks token usage with Gemini's token counting API
-- Intelligently limits content to ~1.9M tokens to stay within 2M token limit
-- Dynamically adjusts content size based on actual tokenization ratio
-- Smart truncation preserves repository structure and most important files
-- Provides detailed file metadata and structure information
-- Falls back to Gemini 1.5 Pro if encountering quota issues
-- Robust token limit handling to prevent API errors
+## Gemini API Usage
+- Uses Gemini models with fallback mechanism for rate limit handling
+- Primary model: Gemini 2.0 Flash Thinking (15 RPM, 4M TPM, 1500 RPD)
+- Fallback 1: Gemini 2.0 Pro Experimental (2 RPM, 1M TPM, 50 RPD)
+- Fallback 2: Gemini 1.5 Pro for quota issues
 - Requires `GEMINI_API_KEY` in `.env` file or as environment variable
 - Creates output in `repo-output-{repoName}` directories
 - Raw API response saved to `raw-api-response.txt` for debugging

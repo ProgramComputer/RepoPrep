@@ -68,14 +68,46 @@ const OUTPUT_FILE = "interview_questions.json";
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-// Use Gemini 2.0 which has a 2M token context window
-const model = genAI.getGenerativeModel({ 
-  model: "gemini-2.0-pro-exp-02-05", // Use the correct model name
-  generationConfig: {
-    temperature: 0.2,  // Use lower temperature for more factual responses
-    maxOutputTokens: 30000 // Increase max output token count for detailed answers
+// Initialize model variable that will be assigned during usage
+let model: ReturnType<typeof genAI.getGenerativeModel>; // Will be assigned dynamically when used
+
+// Define model configurations
+const MODEL_CONFIGS = {
+  // Primary: Flash Thinking (15 RPM, 4M TPM, 1500 RPD)
+  flashThinking: {
+    model: "gemini-2.0-flash-thinking-exp-01-21",
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 30000
+    }
+  },
+  // Fallback 1: Pro Experimental (2 RPM, 1M TPM, 50 RPD)
+  proExperimental: {
+    model: "gemini-2.0-pro-exp-02-05",
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 30000
+    }
+  },
+  // Fallback 2: Gemini 1.5 Pro
+  geminiPro: {
+    model: "gemini-1.5-pro",
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 30000
+    }
   }
-});
+};
+
+// Create model getter function to get the current model
+function getCurrentModel(): ReturnType<typeof genAI.getGenerativeModel> {
+  if (!model) {
+    // First time initialization - use primary model
+    console.log(chalk.blue("Initializing primary model: Gemini 2.0 Flash Thinking"));
+    model = genAI.getGenerativeModel(MODEL_CONFIGS.flashThinking);
+  }
+  return model;
+}
 
 // Default rubric if no file is provided
 let RUBRIC = `
@@ -313,7 +345,7 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
             THE RAW XML ABOVE IS THE DIRECT OUTPUT FROM REPOMIX, A TOOL THAT CLONES AND ANALYZES REPOSITORIES.
           `;
           
-          const tokenCount = await model.countTokens(fullPromptObject);
+          const tokenCount = await getCurrentModel().countTokens(fullPromptObject);
           console.log(chalk.blue(`Actual token count from API: ${tokenCount.totalTokens.toLocaleString()} tokens`));
           console.log(chalk.blue(`Maximum allowed tokens: ${MAX_XML_TOKEN_LIMIT.toLocaleString()} tokens`));
           
@@ -360,7 +392,7 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
               THE RAW XML ABOVE IS THE DIRECT OUTPUT FROM REPOMIX, A TOOL THAT CLONES AND ANALYZES REPOSITORIES.
             `;
             
-            const finalTokenCount = await model.countTokens(finalPromptObject);
+            const finalTokenCount = await getCurrentModel().countTokens(finalPromptObject);
             console.log(chalk.blue(`Final token count: ${finalTokenCount.totalTokens.toLocaleString()} tokens`));
             console.log(chalk.blue(`Final XML size: ${Math.round(rawRepoContent.length / 1024)}KB`));
           }
@@ -451,37 +483,52 @@ async function answerRubricQuestionsWithGemini(repoAnalysis: any, rubric: string
 
     try {
       let result;
-      let usedModel = "gemini-2.0-pro-exp-02-05";
+      let usedModel = MODEL_CONFIGS.flashThinking.model;
       
       try {
-        // First try with gemini-2.0-pro-exp-02-05
+        // First try with Gemini Flash Thinking (fastest, highest rate limits)
+        console.log(chalk.blue('Trying primary model: Gemini 2.0 Flash Thinking...'));
+        model = genAI.getGenerativeModel(MODEL_CONFIGS.flashThinking);
         result = await model.generateContent(prompt);
-      } catch (modelError: unknown) {
-        const errorMessage = modelError instanceof Error ? modelError.message : String(modelError);
+      } catch (primaryError: unknown) {
+        const primaryErrorMsg = primaryError instanceof Error ? primaryError.message : String(primaryError);
         
-        // Check if we hit quota limits or other errors with gemini-2.0
-        if (errorMessage.includes('429') || errorMessage.includes('Too Many Requests') || 
-            errorMessage.includes('quota') || errorMessage.includes('Resource has been exhausted')) {
-          console.log(chalk.yellow('Gemini 2.0 quota exceeded, falling back to gemini-1.5-pro...'));
+        // Check if we hit quota limits with Flash Thinking
+        if (primaryErrorMsg.includes('429') || primaryErrorMsg.includes('Too Many Requests') || 
+            primaryErrorMsg.includes('quota') || primaryErrorMsg.includes('Resource has been exhausted')) {
           
-          // Create fallback model with gemini-1.5-pro
-          const fallbackModel = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-pro",
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 30000
+          // Fall back to Pro Experimental model
+          try {
+            console.log(chalk.yellow('Flash Thinking quota/rate limit exceeded, falling back to Gemini 2.0 Pro Experimental...'));
+            model = genAI.getGenerativeModel(MODEL_CONFIGS.proExperimental); 
+            result = await model.generateContent(prompt);
+            usedModel = MODEL_CONFIGS.proExperimental.model;
+            
+          } catch (fallbackError: unknown) {
+            const fallbackErrorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            
+            // Check if Pro Experimental also hit limits
+            if (fallbackErrorMsg.includes('429') || fallbackErrorMsg.includes('Too Many Requests') || 
+                fallbackErrorMsg.includes('quota') || fallbackErrorMsg.includes('Resource has been exhausted')) {
+              
+              // Final fallback - Gemini 1.5 Pro
+              console.log(chalk.yellow('Gemini 2.0 Pro quota exceeded, falling back to Gemini 1.5 Pro...'));
+              model = genAI.getGenerativeModel(MODEL_CONFIGS.geminiPro);
+              
+              // No need to reduce content size - Gemini 1.5 Pro has the same 2M token context window
+              console.log(chalk.yellow('Gemini 1.5 Pro also supports 2M tokens, maintaining full content'));
+              
+              // Try with the final fallback model
+              result = await model.generateContent(prompt);
+              usedModel = MODEL_CONFIGS.geminiPro.model;
+            } else {
+              // Re-throw non-rate limit errors from Pro Experimental
+              throw fallbackError;
             }
-          });
-          
-          // No need to reduce content size - Gemini 1.5 Pro has the same 2M token context window
-          console.log(chalk.yellow('Gemini 1.5 Pro also supports 2M tokens, maintaining full content'));
-          
-          // Try again with fallback model
-          result = await fallbackModel.generateContent(prompt);
-          usedModel = "gemini-1.5-pro";
+          }
         } else {
-          // Re-throw other errors
-          throw modelError;
+          // Re-throw other errors from Flash Thinking that aren't related to rate limits
+          throw primaryError;
         }
       }
       
@@ -671,9 +718,10 @@ async function evaluateAnswerWithGemini(
       Return ONLY the JSON object, nothing else.
     `;
     
-    // Use Gemini API to evaluate the answer
+    // Use Gemini API to evaluate the answer with fallback model strategy
     try {
-      const result = await model.generateContent(prompt);
+      // First try with current model, which will follow the fallback path if needed
+      const result = await getCurrentModel().generateContent(prompt);
       const jsonString = result.response.text();
       return JSON.parse(jsonString);
     } catch (apiError: unknown) {
